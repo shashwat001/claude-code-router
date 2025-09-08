@@ -259,29 +259,43 @@ async function run(options: RunOptions = {}) {
     }
   });
   server.addHook("onError", async (request, reply, error) => {
+    const req = request as any;
+    const model = req.selectedModel || req.body?.model;
+    
     // Check if this is a rate limit error and mark provider
     if (isRateLimitError(error)) {
-      const req = request as any;
-      const model = req.selectedModel || req.body?.model;
       if (model) {
         const provider = model.split(',')[0];
         
-        // Extract rate limit headers from error
-        const headers = error?.response?.headers || error?.headers || {};
+        // Extract rate limit headers from error (handle different provider formats)
+        const responseHeaders = error?.response?.headers || error?.headers || {};
+        
+        // Check for OpenRouter's nested header format in error message
+        let openRouterHeaders = {};
+        if (error.message && error.message.includes('metadata')) {
+          try {
+            const errorData = JSON.parse(error.message.split('): ')[1]);
+            openRouterHeaders = errorData?.error?.metadata?.headers || {};
+          } catch (e) {
+            // Ignore JSON parse errors
+          }
+        }
+        
         const rateLimitHeaders = {
-          limit: headers['x-ratelimit-limit'],
-          remaining: headers['x-ratelimit-remaining'], 
-          reset: headers['x-ratelimit-reset'],
-          retryAfter: headers['retry-after'],
+          'x-ratelimit-limit': responseHeaders['x-ratelimit-limit'] || openRouterHeaders['X-RateLimit-Limit'],
+          'x-ratelimit-remaining': responseHeaders['x-ratelimit-remaining'] || openRouterHeaders['X-RateLimit-Remaining'],
+          'x-ratelimit-reset': responseHeaders['x-ratelimit-reset'] || openRouterHeaders['X-RateLimit-Reset'],
+          'retry-after': responseHeaders['retry-after'],
           timestamp: new Date().toISOString()
         };
         
-        markProviderRateLimited(provider, rateLimitHeaders);
+        await markProviderRateLimited(provider, rateLimitHeaders);
         log(`Marked provider ${provider} as rate-limited due to error: ${error.message}`);
       } else {
         log(`Rate limit error detected but no model information available: ${error.message}`);
       }
     }
+    
     
     event.emit('onError', request, reply, error);
   })

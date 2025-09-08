@@ -101,16 +101,16 @@ const getRoutingScenario = (req: any, tokenCount: number, config: any, lastUsage
   return 'default';
 };
 
-const applyFailoverLogic = (model: string, scenario: string, config: any): string | null => {
+const applyFailoverLogic = async (model: string, scenario: string, config: any): Promise<string | null> => {
   // Get fallback models for this scenario
   const fallbacks = config.Router?.fallbacks?.[scenario] || [];
   
   // Clean up old rate limit data first
-  rateLimitTracker.cleanup();
+  await rateLimitTracker.cleanup();
   
   try {
     // Check if the primary provider is available and get the best available model
-    const availableModel = rateLimitTracker.getAvailableProvider(model, fallbacks);
+    const availableModel = await rateLimitTracker.getAvailableProvider(model, fallbacks);
     
     if (availableModel !== model) {
       log(`Failover activated: ${model} -> ${availableModel} for scenario: ${scenario}`);
@@ -198,8 +198,8 @@ const getUseModel = async (
   return config.Router!.default;
 };
 
-export const markProviderRateLimited = (provider: string, headers?: any) => {
-  rateLimitTracker.markProviderRateLimited(provider, headers);
+export const markProviderRateLimited = async (provider: string, headers?: any) => {
+  await rateLimitTracker.markProviderRateLimited(provider, headers);
 };
 
 export const router = async (req: any, _res: any, context: any) => {
@@ -250,7 +250,7 @@ export const router = async (req: any, _res: any, context: any) => {
     }
     
     // Apply failover logic to handle rate-limited providers
-    const finalModel = applyFailoverLogic(model, scenario, config);
+    const finalModel = await applyFailoverLogic(model, scenario, config);
     
     if (finalModel === null) {
       // All providers are rate-limited, reject the request

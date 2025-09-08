@@ -1,10 +1,13 @@
 import { log } from "./log";
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
 
 interface RateLimitHeaders {
-  limit?: string | number;
-  remaining?: string | number;
-  reset?: string | number;
-  retryAfter?: string | number;
+  'x-ratelimit-limit'?: string | number;
+  'x-ratelimit-remaining'?: string | number;
+  'x-ratelimit-reset'?: string | number;
+  'retry-after'?: string | number;
   timestamp?: string;
 }
 
@@ -18,16 +21,32 @@ interface ProviderStatus {
 export class RateLimitTracker {
   private providerStatus: Map<string, ProviderStatus> = new Map();
   private readonly cooldownPeriod = 5 * 60 * 1000; // 5 minutes
+  private readonly rateLimitFile: string;
+  private loaded = false;
   
-  isProviderRateLimited(provider: string): boolean {
+  constructor() {
+    this.rateLimitFile = path.join(os.homedir(), '.claude-code-router', 'rate-limits.json');
+  }
+  
+  async isProviderRateLimited(provider: string): Promise<boolean> {
+    // Ensure data is loaded from file
+    await this.ensureLoaded();
+    
     const status = this.providerStatus.get(provider);
     if (!status) return false;
     
     const now = Date.now();
-    return now < status.rateLimitedUntil;
+    const isRateLimited = now < status.rateLimitedUntil;
+    
+    if (isRateLimited) {
+      const resetTime = new Date(status.rateLimitedUntil).toISOString();
+      log(`Provider ${provider} is rate-limited until ${resetTime} (loaded from persistent storage)`);
+    }
+    
+    return isRateLimited;
   }
   
-  markProviderRateLimited(provider: string, headers?: RateLimitHeaders): void {
+  async markProviderRateLimited(provider: string, headers?: RateLimitHeaders): Promise<void> {
     const now = Date.now();
     const status = this.providerStatus.get(provider) || {
       rateLimitedUntil: 0,
@@ -49,8 +68,11 @@ export class RateLimitTracker {
     log(`Provider ${provider} marked as rate-limited until ${resetTime}${headers ? ' (based on headers)' : ' (exponential backoff)'}`);
     
     if (headers) {
-      log(`Rate limit info - Limit: ${headers.limit}, Remaining: ${headers.remaining}, Reset: ${headers.reset}, RetryAfter: ${headers.retryAfter}`);
+      log(`Rate limit info - Limit: ${headers['x-ratelimit-limit']}, Remaining: ${headers['x-ratelimit-remaining']}, Reset: ${headers['x-ratelimit-reset']}, RetryAfter: ${headers['retry-after']}`);
     }
+    
+    // Save to persistent storage
+    await this.saveToFile();
   }
   
   private calculateBackoffTime(headers?: RateLimitHeaders, consecutiveFailures: number = 1): number {
@@ -61,31 +83,36 @@ export class RateLimitTracker {
     }
     
     // If retry-after header is present, use it (in seconds)
-    if (headers.retryAfter) {
-      const retryAfterMs = parseInt(String(headers.retryAfter)) * 1000;
+    if (headers['retry-after']) {
+      const retryAfterMs = parseInt(String(headers['retry-after'])) * 1000;
       if (retryAfterMs > 0) {
         return retryAfterMs;
       }
     }
     
     // If reset timestamp is present, calculate time until reset
-    if (headers.reset) {
-      const resetTime = parseInt(String(headers.reset));
-      const now = Math.floor(Date.now() / 1000);
+    if (headers['x-ratelimit-reset']) {
+      const resetTime = parseInt(String(headers['x-ratelimit-reset']));
+      const now = Date.now();
+      const nowSeconds = Math.floor(now / 1000);
       
-      // If reset is a Unix timestamp
-      if (resetTime > now) {
-        return (resetTime - now) * 1000;
-      }
-      
-      // If reset is relative seconds from now
-      if (resetTime > 0 && resetTime < 86400) { // Less than 24 hours
+      // Check if reset time is in milliseconds (like OpenRouter) or seconds
+      if (resetTime > 1000000000000) { // If > 1 trillion, it's milliseconds (year 2001+)
+        // Reset time is in milliseconds
+        if (resetTime > now) {
+          return resetTime - now;
+        }
+      } else if (resetTime > nowSeconds) {
+        // Reset time is in seconds
+        return (resetTime - nowSeconds) * 1000;
+      } else if (resetTime > 0 && resetTime < 86400) {
+        // Reset is relative seconds from now
         return resetTime * 1000;
       }
     }
     
     // If remaining is 0, use longer backoff
-    if (headers.remaining === 0 || headers.remaining === '0') {
+    if (headers['x-ratelimit-remaining'] === 0 || headers['x-ratelimit-remaining'] === '0') {
       return this.cooldownPeriod * 2; // 10 minutes
     }
     
@@ -102,11 +129,11 @@ export class RateLimitTracker {
     }
   }
   
-  getAvailableProvider(primaryModel: string, fallbackModels: string[]): string {
+  async getAvailableProvider(primaryModel: string, fallbackModels: string[]): Promise<string> {
     const primaryProvider = this.getProviderFromModel(primaryModel);
     
     // Check if primary provider is available
-    if (!this.isProviderRateLimited(primaryProvider)) {
+    if (!(await this.isProviderRateLimited(primaryProvider))) {
       return primaryModel;
     }
     
@@ -115,7 +142,7 @@ export class RateLimitTracker {
     // Try fallback providers
     for (const fallbackModel of fallbackModels) {
       const fallbackProvider = this.getProviderFromModel(fallbackModel);
-      if (!this.isProviderRateLimited(fallbackProvider)) {
+      if (!(await this.isProviderRateLimited(fallbackProvider))) {
         log(`Using fallback model: ${fallbackModel}`);
         return fallbackModel;
       }
@@ -131,13 +158,67 @@ export class RateLimitTracker {
     return model.split(',')[0];
   }
   
-  cleanup(): void {
+  async cleanup(): Promise<void> {
+    await this.ensureLoaded();
     const now = Date.now();
+    let changed = false;
+    
     for (const [provider, status] of this.providerStatus.entries()) {
       if (now > status.rateLimitedUntil) {
         status.consecutiveFailures = 0;
         status.rateLimitedUntil = 0;
+        changed = true;
+        log(`Provider ${provider} rate limit expired, marking as available`);
       }
+    }
+    
+    if (changed) {
+      await this.saveToFile();
+    }
+  }
+  
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+    
+    try {
+      await this.loadFromFile();
+    } catch (error) {
+      log(`Could not load rate limit data, starting fresh: ${error.message}`);
+    }
+    this.loaded = true;
+  }
+  
+  private async loadFromFile(): Promise<void> {
+    try {
+      const data = await fs.readFile(this.rateLimitFile, 'utf-8');
+      const parsed = JSON.parse(data);
+      
+      // Convert the plain object back to Map with ProviderStatus objects
+      if (parsed && typeof parsed === 'object') {
+        for (const [provider, statusData] of Object.entries(parsed)) {
+          this.providerStatus.set(provider, statusData as ProviderStatus);
+        }
+        log(`Loaded rate limit data for ${Object.keys(parsed).length} providers`);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') { // File not found is ok, other errors are not
+        log(`Error loading rate limit file: ${error.message}`);
+      }
+    }
+  }
+  
+  private async saveToFile(): Promise<void> {
+    try {
+      // Ensure directory exists
+      await fs.mkdir(path.dirname(this.rateLimitFile), { recursive: true });
+      
+      // Convert Map to plain object for JSON serialization
+      const dataToSave = Object.fromEntries(this.providerStatus);
+      
+      await fs.writeFile(this.rateLimitFile, JSON.stringify(dataToSave, null, 2));
+      log(`Saved rate limit data to ${this.rateLimitFile}`);
+    } catch (error) {
+      log(`Error saving rate limit file: ${error.message}`);
     }
   }
 }
