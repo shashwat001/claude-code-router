@@ -4,7 +4,7 @@ import { homedir } from "os";
 import path, { join } from "path";
 import { initConfig, initDir, cleanupLogFiles } from "./utils";
 import { createServer } from "./server";
-import { router } from "./utils/router";
+import { router, markProviderRateLimited } from "./utils/router";
 import { apiKeyAuth } from "./middleware/auth";
 import {
   cleanupPidFile,
@@ -24,6 +24,32 @@ import agentsManager from "./agents";
 import { EventEmitter } from "node:events";
 
 const event = new EventEmitter()
+
+const isRateLimitError = (error: any): boolean => {
+  if (!error) return false;
+  
+  // Check for HTTP 429 status code
+  if (error.status === 429 || error.statusCode === 429) {
+    return true;
+  }
+  
+  // Check for rate limit in error message
+  const message = error.message?.toLowerCase() || '';
+  if (message.includes('rate limit') || 
+      message.includes('too many requests') ||
+      message.includes('quota exceeded') ||
+      message.includes('rate_limit_exceeded') ||
+      message.includes('free-models-per-day')) {
+    return true;
+  }
+
+  // Check error code in nested error objects (like OpenRouter format)
+  if (error.code === 429) {
+    return true;
+  }
+
+  return false;
+};
 
 async function initializeClaudeConfig() {
   const homeDir = homedir();
@@ -210,13 +236,53 @@ async function run(options: RunOptions = {}) {
       if (useAgents.length) {
         req.agents = useAgents;
       }
-      await router(req, reply, {
-        config,
-        event
-      });
+      
+      try {
+        await router(req, reply, {
+          config,
+          event
+        });
+      } catch (error: any) {
+        // Handle rate limit exhaustion by returning a 429 response
+        if (error.message.includes('All providers are currently rate-limited')) {
+          reply.status(429).send({
+            error: {
+              type: 'rate_limit_exceeded',
+              message: error.message
+            }
+          });
+          return;
+        }
+        // Re-throw other errors
+        throw error;
+      }
     }
   });
   server.addHook("onError", async (request, reply, error) => {
+    // Check if this is a rate limit error and mark provider
+    if (isRateLimitError(error)) {
+      const req = request as any;
+      const model = req.selectedModel || req.body?.model;
+      if (model) {
+        const provider = model.split(',')[0];
+        
+        // Extract rate limit headers from error
+        const headers = error?.response?.headers || error?.headers || {};
+        const rateLimitHeaders = {
+          limit: headers['x-ratelimit-limit'],
+          remaining: headers['x-ratelimit-remaining'], 
+          reset: headers['x-ratelimit-reset'],
+          retryAfter: headers['retry-after'],
+          timestamp: new Date().toISOString()
+        };
+        
+        markProviderRateLimited(provider, rateLimitHeaders);
+        log(`Marked provider ${provider} as rate-limited due to error: ${error.message}`);
+      } else {
+        log(`Rate limit error detected but no model information available: ${error.message}`);
+      }
+    }
+    
     event.emit('onError', request, reply, error);
   })
   server.addHook("onSend", (req, reply, payload, done) => {
