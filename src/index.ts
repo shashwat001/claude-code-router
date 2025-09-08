@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { writeFile } from "fs/promises";
+import { writeFile, symlink, unlink } from "fs/promises";
 import { homedir } from "os";
 import path, { join } from "path";
 import { initConfig, initDir, cleanupLogFiles } from "./utils";
@@ -108,6 +108,25 @@ async function run(options: RunOptions = {}) {
 
     return `./logs/ccr-${month}${day}${hour}${minute}${pad(time.getSeconds())}${index ? `_${index}` : ''}.log`;
   };
+
+  // Function to update the ccr.log symlink
+  const updateSymlink = async (logFilePath: string) => {
+    const logsDir = join(HOME_DIR, 'logs');
+    const symlinkPath = join(logsDir, 'ccr.log');
+    const relativePath = path.relative(logsDir, logFilePath);
+    
+    try {
+      // Remove existing symlink if it exists
+      if (existsSync(symlinkPath)) {
+        await unlink(symlinkPath);
+      }
+      // Create new symlink
+      await symlink(relativePath, symlinkPath);
+    } catch (error) {
+      console.warn(`Failed to update ccr.log symlink: ${error}`);
+    }
+  };
+
   const loggerConfig =
     config.LOG !== false
       ? {
@@ -118,6 +137,9 @@ async function run(options: RunOptions = {}) {
             interval: "1d",
             compress: false,
             maxSize: "50M"
+          }).on('open', function(filename) {
+            // Update symlink whenever a new log file is created
+            updateSymlink(filename);
           }),
         }
       : false;
