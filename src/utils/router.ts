@@ -5,11 +5,8 @@ import {
 } from "@anthropic-ai/sdk/resources/messages";
 import { get_encoding } from "tiktoken";
 import { sessionUsageCache, Usage } from "./cache";
-<<<<<<< HEAD
 import { readFile } from 'fs/promises'
-=======
 import { RateLimitTracker } from "./rateLimitTracker";
->>>>>>> 1ab30f1 (Add intelligent rate limiting and failover system)
 
 const enc = get_encoding("cl100k_base");
 
@@ -77,45 +74,45 @@ const getRoutingScenario = (req: any, tokenCount: number, config: any, lastUsage
     lastUsage.input_tokens > longContextThreshold &&
     tokenCount > 20000;
   const tokenCountThreshold = tokenCount > longContextThreshold;
-  
+
   if ((lastUsageThreshold || tokenCountThreshold) && config.Router.longContext) {
     return 'longContext';
   }
-  
+
   if (req.body?.system?.length > 1 && req.body?.system[1]?.text?.startsWith("<CCR-SUBAGENT-MODEL>")) {
     return 'subagent';
   }
-  
+
   if (req.body.model?.startsWith("claude-3-5-haiku") && config.Router.background) {
     return 'background';
   }
-  
+
   if (req.body.thinking && config.Router.think) {
     return 'think';
   }
-  
+
   if (Array.isArray(req.body.tools) && req.body.tools.some((tool: any) => tool.type?.startsWith("web_search")) && config.Router.webSearch) {
     return 'webSearch';
   }
-  
+
   return 'default';
 };
 
 const applyFailoverLogic = async (model: string, scenario: string, config: any): Promise<string | null> => {
   // Get fallback models for this scenario
   const fallbacks = config.Router?.fallbacks?.[scenario] || [];
-  
+
   // Clean up old rate limit data first
   await rateLimitTracker.cleanup();
-  
+
   try {
     // Check if the primary provider is available and get the best available model
     const availableModel = await rateLimitTracker.getAvailableProvider(model, fallbacks);
-    
+
     if (availableModel !== model) {
       log(`Failover activated: ${model} -> ${availableModel} for scenario: ${scenario}`);
     }
-    
+
     return availableModel;
   } catch (error) {
     // All providers are rate-limited, return null to indicate failure
@@ -133,10 +130,10 @@ const getUseModel = async (
   if (req.body.model.includes(",")) {
     const [provider, model] = req.body.model.split(",");
     const finalProvider = config.Providers.find(
-        (p: any) => p.name.toLowerCase() === provider
+      (p: any) => p.name.toLowerCase() === provider
     );
     const finalModel = finalProvider?.models?.find(
-        (m: any) => m.toLowerCase() === model
+      (m: any) => m.toLowerCase() === model
     );
     if (finalProvider && finalModel) {
       return `${finalProvider.name},${finalModel}`;
@@ -155,7 +152,7 @@ const getUseModel = async (
     (lastUsageThreshold || tokenCountThreshold) &&
     config.Router.longContext
   ) {
-        req.log.info(
+    req.log.info(
       `Using long context model due to token count: ${tokenCount}, threshold: ${longContextThreshold}`
     );
     return config.Router.longContext;
@@ -220,7 +217,7 @@ export const router = async (req: any, _res: any, context: any) => {
   }
 
 =======
-  
+
 >>>>>>> 1ab30f1 (Add intelligent rate limiting and failover system)
   try {
     const tokenCount = calculateTokenCount(
@@ -248,33 +245,33 @@ export const router = async (req: any, _res: any, context: any) => {
     if (!model) {
       model = await getUseModel(req, tokenCount, config, lastMessageUsage);
     }
-    
+
     // Apply failover logic to handle rate-limited providers
     const finalModel = await applyFailoverLogic(model, scenario, config);
-    
+
     if (finalModel === null) {
       // All providers are rate-limited, reject the request
       throw new Error(`Request rejected: All providers are currently rate-limited for scenario '${scenario}'. Please try again later.`);
     }
-    
+
     req.body.model = finalModel;
-    
+
     // Store routing information for error handling
     req.routingScenario = scenario;
     req.primaryModel = model;
     req.selectedModel = finalModel;
-    
+
   } catch (error: any) {
 <<<<<<< HEAD
     req.log.error(`Error in router middleware: ${error.message}`);
 =======
     log("Error in router middleware:", error.message);
-    
+
     // If this is a rate limit exhaustion error, don't fallback - let it bubble up
     if (error.message.includes('All providers are currently rate-limited')) {
       throw error;
     }
-    
+
     // For other router errors, fallback to default
 >>>>>>> 1ab30f1 (Add intelligent rate limiting and failover system)
     req.body.model = config.Router!.default;
