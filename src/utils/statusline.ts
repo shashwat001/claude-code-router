@@ -105,25 +105,25 @@ const TRUE_COLOR_BG_PREFIX = "\x1b[48;2;";
 function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
   // Remove # and spaces
   hex = hex.replace(/^#/, '').trim();
-  
+
   // Handle shorthand form (#RGB -> #RRGGBB)
   if (hex.length === 3) {
     hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
   }
-  
+
   if (hex.length !== 6) {
     return null;
   }
-  
+
   const r = parseInt(hex.substring(0, 2), 16);
   const g = parseInt(hex.substring(2, 4), 16);
   const b = parseInt(hex.substring(4, 6), 16);
-  
+
   // Validate if RGB values are valid
   if (isNaN(r) || isNaN(g) || isNaN(b) || r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) {
     return null;
   }
-  
+
   return { r, g, b };
 }
 
@@ -136,12 +136,12 @@ function getColorCode(colorName: string): string {
       return `${TRUE_COLOR_PREFIX}${rgb.r};${rgb.g};${rgb.b}m`;
     }
   }
-  
+
   // Check if it's a predefined color
   if (COLORS[colorName]) {
     return COLORS[colorName];
   }
-  
+
   // Return empty string by default
   return "";
 }
@@ -159,10 +159,10 @@ async function executeScript(scriptPath: string, variables: Record<string, strin
   try {
     // Check if file exists
     await fs.access(scriptPath);
-    
+
     // Use require to dynamically load script module
     const scriptModule = require(scriptPath);
-    
+
     // If exported is a function, call it and pass variables
     if (typeof scriptModule === 'function') {
       const result = scriptModule(variables);
@@ -172,7 +172,7 @@ async function executeScript(scriptPath: string, variables: Record<string, strin
       }
       return result;
     }
-    
+
     // If exported is a default function, call it
     if (scriptModule.default && typeof scriptModule.default === 'function') {
       const result = scriptModule.default(variables);
@@ -182,17 +182,17 @@ async function executeScript(scriptPath: string, variables: Record<string, strin
       }
       return result;
     }
-    
+
     // If exported is a string, return it directly
     if (typeof scriptModule === 'string') {
       return scriptModule;
     }
-    
+
     // If exported is a default string, return it
     if (scriptModule.default && typeof scriptModule.default === 'string') {
       return scriptModule.default;
     }
-    
+
     // Return empty string by default
     return "";
   } catch (error) {
@@ -341,78 +341,30 @@ interface TokenStats {
 
 // Calculate total token usage (based on token-status.sh logic)
 function calculateTotalTokens(lines: string[]): TokenStats {
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCacheCreationTokens = 0;
-  let totalCacheReadTokens = 0;
-  
-  // Process each line of transcript (JSONL format)
-  for (const line of lines) {
-    if (line.trim()) {
-      try {
-        const message = JSON.parse(line);
-        if (message.message && message.message.usage) {
-          const usage = message.message.usage;
-          totalInputTokens += usage.input_tokens || 0;
-          totalOutputTokens += usage.output_tokens || 0;
-          totalCacheCreationTokens += usage.cache_creation_input_tokens || 0;
-          totalCacheReadTokens += usage.cache_read_input_tokens || 0;
-        }
-      } catch (parseError) {
-        // Ignore parsing errors, continue processing next line
-        continue;
-      }
-    }
-  }
-  
-  // Get token information from the last message
-  let lastMessageCacheRead = 0;
-  let lastInputTokens = 0;
-  let lastOutputTokens = 0;
-  let lastCacheCreationTokens = 0;
-  
-  if (lines.length > 0) {
+  let cacheRead = 0, inputTokens = 0, outputTokens = 0, cacheCreation = 0;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
     try {
-      const lastMessage = JSON.parse(lines[lines.length - 1]);
-      if (lastMessage.message && lastMessage.message.usage) {
-        const usage = lastMessage.message.usage;
-        lastMessageCacheRead = usage.cache_read_input_tokens || 0;
-        lastInputTokens = usage.input_tokens || 0;
-        lastOutputTokens = usage.output_tokens || 0;
-        lastCacheCreationTokens = usage.cache_creation_input_tokens || 0;
+      const msg = JSON.parse(line);
+      if (msg.type === "assistant" && msg.message?.usage) {
+        const usage = msg.message.usage;
+        cacheRead = usage.cache_read_input_tokens || 0;
+        inputTokens = usage.input_tokens || 0;
+        outputTokens = usage.output_tokens || 0;
+        cacheCreation = usage.cache_creation_input_tokens || 0;
+        break;
       }
-    } catch (parseError) {
-      // Ignore parsing errors
-    }
+    } catch { }
   }
-  
-  // Calculate total usage (based on token-status.sh logic)
-  let totalUsed = 0;
-  if (lastMessageCacheRead > 0) {
-    // Add adjustment value to account for difference between cache_read and actual context
-    const adjustment = lastInputTokens + lastOutputTokens + lastCacheCreationTokens;
-    totalUsed = lastMessageCacheRead + adjustment;
-    
-    // Limit to reasonable range
-    if (totalUsed > 200000) {
-      totalUsed = 200000;
-    }
-  } else {
-    // Fallback: use total input + output tokens
-    totalUsed = totalInputTokens + totalOutputTokens;
-    if (totalUsed === 0) {
-      totalUsed = 138000; // Default value based on token-status.sh
-    }
-  }
-  
+
+  const totalUsed = cacheRead > 0 ? cacheRead + inputTokens + outputTokens + cacheCreation : 0;
   const maxTokens = 200000;
-  const totalRemaining = Math.max(0, maxTokens - totalUsed);
-  const maxTokensFormatted = `${Math.round(maxTokens / 1000)}k`;
-  
   return {
     totalUsed,
-    totalRemaining,
-    maxTokensFormatted
+    totalRemaining: Math.max(0, maxTokens - totalUsed),
+    maxTokensFormatted: `${Math.round(maxTokens / 1000)}k`
   };
 }
 
@@ -421,22 +373,22 @@ async function getProjectThemeConfig(): Promise<{ theme: StatusLineThemeConfig |
   try {
     // Only use fixed configuration file in home directory
     const configPath = CONFIG_FILE;
-    
+
     // Check if configuration file exists
     try {
       await fs.access(configPath);
     } catch {
       return { theme: null, style: 'default' };
     }
-    
+
     const configContent = await fs.readFile(configPath, "utf-8");
     const config = JSON5.parse(configContent);
-    
+
     // Check if StatusLine configuration exists
     if (config.StatusLine) {
       // Get currently used style, default to 'default'
       const currentStyle = config.StatusLine.currentStyle || 'default';
-      
+
       // Check if configuration for corresponding style exists
       if (config.StatusLine[currentStyle] && config.StatusLine[currentStyle].modules) {
         return { theme: config.StatusLine[currentStyle], style: currentStyle };
@@ -446,7 +398,7 @@ async function getProjectThemeConfig(): Promise<{ theme: StatusLineThemeConfig |
     // If reading fails, return null
     // console.error("Failed to read theme config:", error);
   }
-  
+
   return { theme: null, style: 'default' };
 }
 
@@ -457,14 +409,14 @@ function shouldUseSimpleTheme(): boolean {
   if (process.env.USE_SIMPLE_ICONS === 'true') {
     return true;
   }
-  
+
   // Check terminal type (some common terminals that don't support complex icons)
   const term = process.env.TERM || '';
   const unsupportedTerms = ['dumb', 'unknown'];
   if (unsupportedTerms.includes(term)) {
     return true;
   }
-  
+
   // By default, assume terminal supports Nerd Fonts
   return false;
 }
@@ -476,7 +428,7 @@ function canDisplayNerdFonts(): boolean {
   if (process.env.USE_SIMPLE_ICONS === 'true') {
     return false;
   }
-  
+
   // Check some common terminal environment variables that support Nerd Fonts
   const fontEnvVars = ['NERD_FONT', 'NERDFONT', 'FONT'];
   for (const envVar of fontEnvVars) {
@@ -485,20 +437,20 @@ function canDisplayNerdFonts(): boolean {
       return true;
     }
   }
-  
+
   // Check terminal type
   const termProgram = process.env.TERM_PROGRAM || '';
   const supportedTerminals = ['iTerm.app', 'vscode', 'Hyper', 'kitty', 'alacritty'];
   if (supportedTerminals.includes(termProgram)) {
     return true;
   }
-  
+
   // Check COLORTERM environment variable
   const colorTerm = process.env.COLORTERM || '';
   if (colorTerm.includes('truecolor') || colorTerm.includes('24bit')) {
     return true;
   }
-  
+
   // By default, assume Nerd Fonts can be displayed (but allow user override via environment variables)
   return process.env.USE_SIMPLE_ICONS !== 'true';
 }
@@ -514,7 +466,7 @@ function canDisplayUnicodeCharacter(char: string): boolean {
     if (lang.includes('UTF-8') || lang.includes('utf8') || lang.includes('UTF8')) {
       return true;
     }
-    
+
     // Check LC_* environment variables
     const lcVars = ['LC_ALL', 'LC_CTYPE', 'LANG'];
     for (const lcVar of lcVars) {
@@ -527,7 +479,7 @@ function canDisplayUnicodeCharacter(char: string): boolean {
     // If check fails, return true by default
     return true;
   }
-  
+
   // By default, assume it can be displayed
   return true;
 }
@@ -536,21 +488,21 @@ export async function parseStatusLineData(input: StatusLineInput): Promise<strin
   try {
     // Check if simple theme should be used
     const useSimpleTheme = shouldUseSimpleTheme();
-    
+
     // Check if Nerd Fonts icons can be displayed
     const canDisplayNerd = canDisplayNerdFonts();
-    
+
     // Determine theme to use: if user forces simple theme or cannot display Nerd Fonts, use simple theme
     const effectiveTheme = useSimpleTheme || !canDisplayNerd ? SIMPLE_THEME : DEFAULT_THEME;
-    
+
     // Get theme configuration from home directory, if none exists use determined default configuration
     const { theme: projectTheme, style: currentStyle } = await getProjectThemeConfig();
     const theme = projectTheme || effectiveTheme;
-    
+
     // Get current working directory and Git branch
     const workDir = input.workspace.current_dir;
     let gitBranch = "";
-    
+
     try {
       // Try to get Git branch name
       gitBranch = execSync("git branch --show-current", {
@@ -562,25 +514,25 @@ export async function parseStatusLineData(input: StatusLineInput): Promise<strin
     } catch (error) {
       // If not a Git repository or retrieval fails, ignore the error
     }
-    
+
     // Read last assistant message from transcript_path file and calculate total token usage
     const transcriptContent = await fs.readFile(input.transcript_path, "utf-8");
     const lines = transcriptContent.trim().split("\n");
-    
+
     // Calculate total token usage (similar to token-status.sh logic)
     const tokenStats = calculateTotalTokens(lines);
-    
+
     // Traverse backwards to find the last assistant message
     let model = "";
     let inputTokens = 0;
     let outputTokens = 0;
-    
+
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const message: AssistantMessage = JSON.parse(lines[i]);
         if (message.type === "assistant" && message.message.model) {
           model = message.message.model;
-          
+
           if (message.message.usage) {
             inputTokens = message.message.usage.input_tokens;
             outputTokens = message.message.usage.output_tokens;
@@ -592,25 +544,25 @@ export async function parseStatusLineData(input: StatusLineInput): Promise<strin
         continue;
       }
     }
-    
+
     // If model name not obtained from transcript, try to get from configuration file
     if (!model) {
       try {
         // Get project configuration file path
         const projectConfigPath = path.join(workDir, ".claude-code-router", "config.json");
         let configPath = projectConfigPath;
-        
+
         // Check if project configuration file exists, if not use user home directory configuration file
         try {
           await fs.access(projectConfigPath);
         } catch {
           configPath = CONFIG_FILE;
         }
-        
+
         // Read configuration file
         const configContent = await fs.readFile(configPath, "utf-8");
         const config = JSON5.parse(configContent);
-        
+
         // Get model name from Router field's default content
         if (config.Router && config.Router.default) {
           const [, defaultModel] = config.Router.default.split(",");
@@ -622,24 +574,24 @@ export async function parseStatusLineData(input: StatusLineInput): Promise<strin
         // If configuration file reading fails, ignore the error
       }
     }
-    
+
     // If still no model name obtained, use display_name from model field in passed JSON data
     if (!model) {
       model = input.model.display_name;
     }
-    
+
     // Get working directory name
     const workDirName = workDir.split("/").pop() || "";
-    
+
     // Format usage information
     const usage = formatUsage(inputTokens, outputTokens);
     const [formattedInputTokens, formattedOutputTokens] = usage.split(" ");
-    
+
     // Format total token information
     const totalUsedFormatted = formatTokensWithK(tokenStats.totalUsed);
     const totalRemainingFormatted = formatTokensWithK(tokenStats.totalRemaining);
     const totalTokensDisplay = `${totalUsedFormatted}/${tokenStats.maxTokensFormatted} used | ${totalRemainingFormatted} remaining`;
-    
+
     // Define variable replacement mapping
     const variables = {
       workDirName,
@@ -652,10 +604,10 @@ export async function parseStatusLineData(input: StatusLineInput): Promise<strin
       totalRemaining: totalRemainingFormatted,
       maxTokens: tokenStats.maxTokensFormatted
     };
-    
+
     // Determine style to use
     const isPowerline = currentStyle === 'powerline';
-    
+
     // Render status line according to style
     if (isPowerline) {
       return await renderPowerlineStyle(theme, variables);
@@ -673,17 +625,17 @@ async function getProjectThemeConfigForStyle(style: string): Promise<StatusLineT
   try {
     // Only use fixed configuration file in home directory
     const configPath = CONFIG_FILE;
-    
+
     // Check if configuration file exists
     try {
       await fs.access(configPath);
     } catch {
       return null;
     }
-    
+
     const configContent = await fs.readFile(configPath, "utf-8");
     const config = JSON5.parse(configContent);
-    
+
     // Check if StatusLine configuration exists
     if (config.StatusLine && config.StatusLine[style] && config.StatusLine[style].modules) {
       return config.StatusLine[style];
@@ -692,7 +644,7 @@ async function getProjectThemeConfigForStyle(style: string): Promise<StatusLineT
     // If reading fails, return null
     // console.error("Failed to read theme config:", error);
   }
-  
+
   return null;
 }
 
@@ -703,14 +655,14 @@ async function renderDefaultStyle(
 ): Promise<string> {
   const modules = theme.modules || DEFAULT_THEME.modules;
   const parts: string[] = [];
-  
+
   // Iterate through module array, render each module
   for (let i = 0; i < Math.min(modules.length, 5); i++) {
     const module = modules[i];
     const color = module.color ? getColorCode(module.color) : "";
     const background = module.background ? getColorCode(module.background) : "";
     const icon = module.icon || "";
-    
+
     // If script type, execute script to get text
     let text = "";
     if (module.type === "script" && module.scriptPath) {
@@ -718,26 +670,26 @@ async function renderDefaultStyle(
     } else {
       text = replaceVariables(module.text, variables);
     }
-    
+
     // Build display text
     let displayText = "";
     if (icon) {
       displayText += `${icon} `;
     }
     displayText += text;
-    
+
     // If displayText is empty, or only has icon without actual text, skip this module
     if (!displayText || !text) {
       continue;
     }
-    
+
     // Build module string
     let part = `${background}${color}`;
     part += `${displayText}${COLORS.reset}`;
-    
+
     parts.push(part);
   }
-  
+
   // Connect all parts with spaces
   return parts.join(" ");
 }
@@ -793,24 +745,24 @@ function getTrueColorRgb(colorName: string): { r: number; g: number; b: number }
     const color256 = COLOR_MAP[colorName];
     return color256ToRgb(color256);
   }
-  
+
   // Handle hexadecimal colors
   if (colorName.startsWith('#') || /^[0-9a-fA-F]{6}$/.test(colorName) || /^[0-9a-fA-F]{3}$/.test(colorName)) {
     return hexToRgb(colorName);
   }
-  
+
   // Handle background color hexadecimal
   if (colorName.startsWith('bg_#')) {
     return hexToRgb(colorName.substring(3));
   }
-  
+
   return null;
 }
 
 // Convert 256 color table index to RGB values
 function color256ToRgb(index: number): { r: number; g: number; b: number } | null {
   if (index < 0 || index > 255) return null;
-  
+
   // ANSI 256 color table conversion
   if (index < 16) {
     // Basic colors
@@ -847,19 +799,19 @@ function segment(text: string, textFg: string, bgColor: string, nextBgColor: str
     const body = `${curBg}${fgColor} ${text} \x1b[0m`;
     return body;
   }
-  
+
   const curBg = `\x1b[48;2;${bgRgb.r};${bgRgb.g};${bgRgb.b}m`;
-  
+
   // Get foreground color RGB
   let fgRgb = { r: 255, g: 255, b: 255 }; // Default foreground color is white
   const textFgRgb = getTrueColorRgb(textFg);
   if (textFgRgb) {
     fgRgb = textFgRgb;
   }
-  
+
   const fgColor = `\x1b[38;2;${fgRgb.r};${fgRgb.g};${fgRgb.b}m`;
   const body = `${curBg}${fgColor} ${text} \x1b[0m`;
-  
+
   if (nextBgColor != null) {
     const nextBgRgb = getTrueColorRgb(nextBgColor);
     if (nextBgRgb) {
@@ -875,7 +827,7 @@ function segment(text: string, textFg: string, bgColor: string, nextBgColor: str
     const sep = `${sepCurFg}${sepNextBg}${SEP_RIGHT}\x1b[0m`;
     return body + sep;
   }
-  
+
   return body;
 }
 
@@ -886,14 +838,14 @@ async function renderPowerlineStyle(
 ): Promise<string> {
   const modules = theme.modules || POWERLINE_THEME.modules;
   const segments: string[] = [];
-  
+
   // Iterate through module array, render each module
   for (let i = 0; i < Math.min(modules.length, 5); i++) {
     const module = modules[i];
     const color = module.color || "white";
     const backgroundName = module.background || "";
     const icon = module.icon || "";
-    
+
     // If script type, execute script to get text
     let text = "";
     if (module.type === "script" && module.scriptPath) {
@@ -901,33 +853,33 @@ async function renderPowerlineStyle(
     } else {
       text = replaceVariables(module.text, variables);
     }
-    
+
     // Build display text
     let displayText = "";
     if (icon) {
       displayText += `${icon} `;
     }
     displayText += text;
-    
+
     // If displayText is empty, or only has icon without actual text, skip this module
     if (!displayText || !text) {
       continue;
     }
-    
+
     // Get next module's background color (for separator)
     let nextBackground: string | null = null;
     if (i < modules.length - 1) {
       const nextModule = modules[i + 1];
       nextBackground = nextModule.background || null;
     }
-    
+
     // Use module-defined background color, or provide default background color for Powerline style
     const actualBackground = backgroundName || "bg_bright_blue";
-    
+
     // Generate segment, supports hexadecimal colors
     const segmentStr = segment(displayText, color, actualBackground, nextBackground);
     segments.push(segmentStr);
   }
-  
+
   return segments.join("");
 }
