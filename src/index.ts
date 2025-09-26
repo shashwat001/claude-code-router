@@ -131,6 +131,7 @@ async function run(options: RunOptions = {}) {
     config.LOG !== false
       ? {
           level: config.LOG_LEVEL || "debug",
+          timestamp: () => `,"time":"${new Date().toLocaleString('sv-SE')}"`,
           stream: createStream(generator, {
             path: HOME_DIR,
             maxFiles: 3,
