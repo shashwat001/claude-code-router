@@ -1,6 +1,6 @@
 import { IAgent, ITool } from "./type";
-import { createHash } from "crypto";
-import * as LRU from "lru-cache";
+import { createHash } from 'crypto';
+import * as LRU from 'lru-cache';
 
 interface ImageCacheEntry {
   source: any;
@@ -56,48 +56,34 @@ export class ImageAgent implements IAgent {
   }
 
   shouldHandle(req: any, config: any): boolean {
-    if (!config.Router.image || req.body.model === config.Router.image)
+    if (!config.Router.image || req.body.model === config.Router.image) return false;
+
+    const messageHasImage = (msg: any) => {
+      if (msg.role !== 'user') return false;
+      if (Array.isArray(msg.content)) {
+        return msg.content.some((item: any) => item.type === 'image');
+      }
+      if (typeof msg.content === 'string') {
+        return /\[Image #\\d+\]/.test(msg.content);
+      }
       return false;
+    }
+
     const lastMessage = req.body.messages[req.body.messages.length - 1];
-    if (
-      !config.forceUseImageAgent &&
-      lastMessage.role === "user" &&
-      Array.isArray(lastMessage.content) &&
-      lastMessage.content.find(
-        (item: any) =>
-          item.type === "image" ||
-          (Array.isArray(item?.content) &&
-            item.content.some((sub: any) => sub.type === "image"))
-      )
-    ) {
-      req.body.model = config.Router.image;
-      const images = [];
-      lastMessage.content
-        .filter((item: any) => item.type === "tool_result")
-        .forEach((item: any) => {
-          if (Array.isArray(item.content)) {
-            item.content.forEach((element: any) => {
-              if (element.type === "image") {
-                images.push(element);
-              }
-            });
-            item.content = "read image successfully";
+
+    if (!config.forceUseImageAgent && messageHasImage(lastMessage)) {
+      req.body.model = config.Router.image
+      const images = []
+      lastMessage.content.filter((item: any) => item.type === 'tool_result').forEach((item: any) => {
+        item.content.forEach((element: any) => {
+          if (element.type === 'image') {
+            images.push(element);
           }
         });
       lastMessage.content.push(...images);
       return false;
     }
-    return req.body.messages.some(
-      (msg: any) =>
-        msg.role === "user" &&
-        Array.isArray(msg.content) &&
-        msg.content.some(
-          (item: any) =>
-            item.type === "image" ||
-            (Array.isArray(item?.content) &&
-              item.content.some((sub: any) => sub.type === "image"))
-        )
-    );
+    return req.body.messages.some(messageHasImage)
   }
 
   appendTools() {
@@ -115,30 +101,22 @@ export class ImageAgent implements IAgent {
               type: "string",
             },
           },
-          task: {
-            type: "string",
-            description:
-              "Details of task to perform on the image.The more detailed, the better",
+          "task": {
+            "type": "string",
+            "description": "Details of task to perform on the image.The more detailed, the better",
           },
-          regions: {
-            type: "array",
-            description: "Optional regions of interest within the image",
-            items: {
-              type: "object",
-              properties: {
-                name: {
-                  type: "string",
-                  description: "Optional label for the region",
-                },
-                x: { type: "number", description: "X coordinate" },
-                y: { type: "number", description: "Y coordinate" },
-                w: { type: "number", description: "Width of the region" },
-                h: { type: "number", description: "Height of the region" },
-                units: {
-                  type: "string",
-                  enum: ["px", "pct"],
-                  description: "Units for coordinates and size",
-                },
+          "regions": {
+            "type": "array",
+            "description": "Optional regions of interest within the image",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Optional label for the region" },
+                "x": { "type": "number", "description": "X coordinate" },
+                "y": { "type": "number", "description": "Y coordinate" },
+                "w": { "type": "number", "description": "Width of the region" },
+                "h": { "type": "number", "description": "Height of the region" },
+                "units": { "type": "string", "enum": ["px", "pct"], "description": "Units for coordinates and size" }
               },
               required: ["x", "y", "w", "h", "units"],
             },
@@ -298,6 +276,9 @@ Your response should consistently follow this rule whenever image-related analys
         }
       });
     });
+    if (req.body.model === config.Router.image) {
+      delete req.body.tools;
+    }
   }
 }
 

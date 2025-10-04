@@ -316,8 +316,8 @@ async function run(options: RunOptions = {}) {
                       continue
                     }
 
-                    // 检查流是否仍然可写
-                    if (!controller.desiredSize) {
+                    // 检查流是否已关闭 (只在关闭时停止)
+                    if (controller.desiredSize === null) {
                       break;
                     }
 
