@@ -5,4 +5,5 @@ log.txt
 dist
 .DS_Store
 .vscode
+.serena
 tsconfig.tsbuildinfo

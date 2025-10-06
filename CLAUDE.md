@@ -75,4 +75,6 @@ transformResponseOut() // Return standardized response
 ```
 
 This architecture allows Claude Code to work with **any LLM provider** while maintaining a consistent interface, with automatic format translation and intelligent routing based on request characteristics.
-- 无论如何你都不能自动提交git
+
+- dont make long function, add fucntion whereever you can for better readbility. also dont add chinese comment
+- always make logical group of changes in a file together, not one by one so that i can review all together
