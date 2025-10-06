@@ -61,11 +61,11 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
         return;
       }
       setHasFetched(true);
-      
+
       try {
         // Try to fetch config regardless of API key presence
         const data = await api.getConfig();
-        
+
         // Validate the received data to ensure it has the expected structure
         const validConfig = {
           LOG: typeof data.LOG === 'boolean' ? data.LOG : false,
@@ -83,13 +83,14 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
             currentStyle: typeof data.StatusLine.currentStyle === 'string' ? data.StatusLine.currentStyle : 'default',
             default: data.StatusLine.default && typeof data.StatusLine.default === 'object' && Array.isArray(data.StatusLine.default.modules) ? data.StatusLine.default : { modules: [] },
             powerline: data.StatusLine.powerline && typeof data.StatusLine.powerline === 'object' && Array.isArray(data.StatusLine.powerline.modules) ? data.StatusLine.powerline : { modules: [] }
-          } : { 
+          } : {
             enabled: false,
             currentStyle: 'default',
             default: { modules: [] },
             powerline: { modules: [] }
           },
           Router: data.Router && typeof data.Router === 'object' ? {
+            ...data.Router,
             default: typeof data.Router.default === 'string' ? data.Router.default : '',
             background: typeof data.Router.background === 'string' ? data.Router.background : '',
             think: typeof data.Router.think === 'string' ? data.Router.think : '',
@@ -108,7 +109,7 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
           },
           CUSTOM_ROUTER_PATH: typeof data.CUSTOM_ROUTER_PATH === 'string' ? data.CUSTOM_ROUTER_PATH : ''
         };
-        
+
         setConfig(validConfig);
       } catch (err) {
         console.error('Failed to fetch config:', err);

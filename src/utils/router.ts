@@ -109,6 +109,12 @@ const getUseModel = async (
   config: any,
   lastUsage?: Usage | undefined
 ) => {
+  // If "all" is set, override everything and use that model
+  if (config.Router.all) {
+    req.log.info(`Using "all" override model: ${config.Router.all}`);
+    return config.Router.all;
+  }
+
   const projectSpecificRouter = await getProjectSpecificRouter(req);
   const Router = projectSpecificRouter || config.Router;
 
