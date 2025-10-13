@@ -15,15 +15,83 @@ import { CONFIG_FILE } from "./constants";
 import { createStream } from 'rotating-file-stream';
 import { HOME_DIR } from "./constants";
 import { sessionUsageCache } from "./utils/cache";
-import {SSEParserTransform} from "./utils/SSEParser.transform";
-import {SSESerializerTransform} from "./utils/SSESerializer.transform";
-import {rewriteStream} from "./utils/rewriteStream";
+import { SSEParserTransform } from "./utils/SSEParser.transform";
+import { SSESerializerTransform } from "./utils/SSESerializer.transform";
+import { rewriteStream } from "./utils/rewriteStream";
 import JSON5 from "json5";
 import { IAgent } from "./agents/type";
 import agentsManager from "./agents";
 import { EventEmitter } from "node:events";
 
 const event = new EventEmitter()
+
+function shouldHandleCountTokens(urlPath: string): boolean {
+  return urlPath === "/v1/messages/count_tokens";
+}
+
+function shouldRouteRequest(urlPath: string): boolean {
+  return urlPath === "/v1/messages";
+}
+
+function handleCountTokensLocally(req: any, reply: any): void {
+  const body = req.body as any;
+  const { get_encoding } = require('tiktoken');
+  const enc = get_encoding("cl100k_base");
+
+  let tokenCount = 0;
+
+  if (Array.isArray(body.messages)) {
+    body.messages.forEach((message: any) => {
+      if (typeof message.content === "string") {
+        tokenCount += enc.encode(message.content).length;
+      } else if (Array.isArray(message.content)) {
+        message.content.forEach((contentPart: any) => {
+          if (contentPart.type === "text" && contentPart.text) {
+            tokenCount += enc.encode(contentPart.text).length;
+          }
+        });
+      }
+    });
+  }
+
+  if (typeof body.system === "string") {
+    tokenCount += enc.encode(body.system).length;
+  } else if (Array.isArray(body.system)) {
+    body.system.forEach((item: any) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        tokenCount += enc.encode(item.text).length;
+      }
+    });
+  }
+
+  enc.free();
+
+  reply.send({ input_tokens: tokenCount });
+}
+
+function processAgentsForRequest(req: any, config: any): string[] {
+  const useAgents: string[] = [];
+
+  for (const agent of agentsManager.getAllAgents()) {
+    if (!agent.shouldHandle(req, config)) continue;
+
+    useAgents.push(agent.name);
+    agent.reqHandler(req, config);
+
+    if (agent.tools.size) {
+      if (!req.body?.tools?.length) {
+        req.body.tools = [];
+      }
+      req.body.tools.unshift(...Array.from(agent.tools.values()).map(item => ({
+        name: item.name,
+        description: item.description,
+        input_schema: item.input_schema
+      })));
+    }
+  }
+
+  return useAgents;
+}
 
 async function initializeClaudeConfig() {
   const homeDir = homedir();
@@ -114,7 +182,7 @@ async function run(options: RunOptions = {}) {
     const logsDir = join(HOME_DIR, 'logs');
     const symlinkPath = join(logsDir, 'ccr.log');
     const relativePath = path.relative(logsDir, logFilePath);
-    
+
     try {
       // Remove existing symlink if it exists
       if (existsSync(symlinkPath)) {
@@ -130,19 +198,19 @@ async function run(options: RunOptions = {}) {
   const loggerConfig =
     config.LOG !== false
       ? {
-          level: config.LOG_LEVEL || "debug",
-          timestamp: () => `,"time":"${new Date().toLocaleString('sv-SE')}"`,
-          stream: createStream(generator, {
-            path: HOME_DIR,
-            maxFiles: 3,
-            interval: "1d",
-            compress: false,
-            maxSize: "50M"
-          }).on('open', function(filename) {
-            // Update symlink whenever a new log file is created
-            updateSymlink(filename);
-          }),
-        }
+        level: config.LOG_LEVEL || "debug",
+        timestamp: () => `,"time":"${new Date().toLocaleString('sv-SE')}"`,
+        stream: createStream(generator, {
+          path: HOME_DIR,
+          maxFiles: 3,
+          interval: "1d",
+          compress: false,
+          maxSize: "50M"
+        }).on('open', function (filename) {
+          // Update symlink whenever a new log file is created
+          updateSymlink(filename);
+        }),
+      }
       : false;
 
   const server = createServer({
@@ -181,41 +249,22 @@ async function run(options: RunOptions = {}) {
     });
   });
   server.addHook("preHandler", async (req, reply) => {
-    if (req.url.startsWith("/v1/messages") && !req.url.startsWith("/v1/messages/count_tokens")) {
-      const useAgents = []
+    const urlPath = req.url.split('?')[0];
 
-      for (const agent of agentsManager.getAllAgents()) {
-        if (agent.shouldHandle(req, config)) {
-          // 设置agent标识
-          useAgents.push(agent.name)
-
-          // change request body
-          agent.reqHandler(req, config);
-
-          // append agent tools
-          if (agent.tools.size) {
-            if (!req.body?.tools?.length) {
-              req.body.tools = []
-            }
-            req.body.tools.unshift(...Array.from(agent.tools.values()).map(item => {
-              return {
-                name: item.name,
-                description: item.description,
-                input_schema: item.input_schema
-              }
-            }))
-          }
-        }
-      }
-
-      if (useAgents.length) {
-        req.agents = useAgents;
-      }
-      await router(req, reply, {
-        config,
-        event
-      });
+    if (shouldHandleCountTokens(urlPath)) {
+      return handleCountTokensLocally(req, reply);
     }
+
+    if (!shouldRouteRequest(urlPath)) {
+      return;
+    }
+
+    const useAgents = processAgentsForRequest(req, config);
+    if (useAgents.length) {
+      req.agents = useAgents;
+    }
+
+    await router(req, reply, { config, event });
   });
   server.addHook("onError", async (request, reply, error) => {
     event.emit('onError', request, reply, error);
@@ -308,7 +357,7 @@ async function run(options: RunOptions = {}) {
                 const reader = stream.getReader()
                 while (true) {
                   try {
-                    const {value, done} = await reader.read();
+                    const { value, done } = await reader.read();
                     if (done) {
                       break;
                     }
@@ -322,7 +371,7 @@ async function run(options: RunOptions = {}) {
                     }
 
                     controller.enqueue(value)
-                  }catch (readError: any) {
+                  } catch (readError: any) {
                     if (readError.name === 'AbortError' || readError.code === 'ERR_STREAM_PREMATURE_CLOSE') {
                       abortController.abort(); // 中止所有相关操作
                       break;
@@ -334,7 +383,7 @@ async function run(options: RunOptions = {}) {
                 return undefined
               }
               return data
-            }catch (error: any) {
+            } catch (error: any) {
               console.error('Unexpected error in stream processing:', error);
 
               // 处理流提前关闭的错误
@@ -365,7 +414,7 @@ async function run(options: RunOptions = {}) {
               try {
                 const message = JSON.parse(str);
                 sessionUsageCache.put(req.sessionId, message.usage);
-              } catch {}
+              } catch { }
             }
           } catch (readError: any) {
             if (readError.name === 'AbortError' || readError.code === 'ERR_STREAM_PREMATURE_CLOSE') {
@@ -381,7 +430,7 @@ async function run(options: RunOptions = {}) {
         return done(null, originalStream)
       }
       sessionUsageCache.put(req.sessionId, payload.usage);
-      if (typeof payload ==='object') {
+      if (typeof payload === 'object') {
         if (payload.error) {
           return done(payload.error, null)
         } else {
@@ -389,7 +438,7 @@ async function run(options: RunOptions = {}) {
         }
       }
     }
-    if (typeof payload ==='object' && payload.error) {
+    if (typeof payload === 'object' && payload.error) {
       return done(payload.error, null)
     }
     done(null, payload)
