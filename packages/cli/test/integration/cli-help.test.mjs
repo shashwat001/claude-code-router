@@ -51,6 +51,20 @@ test("built CLI rejects missing, out-of-range, and unknown service options", () 
   }
 });
 
+test("built CLI exposes profiles command help", () => {
+  const result = runCli(["profiles", "--help"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /ccr profiles/);
+});
+
+test("built CLI rejects unknown profiles options", () => {
+  const result = runCli(["profiles", "add"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown profiles option: add/);
+});
+
 test("built CLI requires a profile reference when no command is supplied", () => {
   const result = runCli([]);
 

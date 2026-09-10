@@ -39,12 +39,17 @@ type WebCliOptions = {
   startGateway: boolean;
 };
 
+type ProfilesCliOptions = {
+  command: "profiles";
+  help: boolean;
+};
+
 type StopCliOptions = {
   command: "stop";
   help: boolean;
 };
 
-type CliOptions = ProfileCliOptions | StopCliOptions | WebCliOptions;
+type CliOptions = ProfileCliOptions | ProfilesCliOptions | StopCliOptions | WebCliOptions;
 
 type ServiceState = {
   host?: string;
@@ -94,6 +99,14 @@ async function main(): Promise<void> {
       return;
     }
     await stopService();
+    return;
+  }
+  if (options.command === "profiles") {
+    if (options.help) {
+      printProfilesHelp(0);
+      return;
+    }
+    await listProfiles();
     return;
   }
   if (options.command === "web") {
@@ -241,6 +254,9 @@ function parseArgs(args: string[]): CliOptions {
   if (args[0] === "stop") {
     return parseStopArgs(args.slice(1));
   }
+  if (args[0] === "profiles") {
+    return parseProfilesArgs(args.slice(1));
+  }
   if (args[0] === "serve" || args[0] === "web") {
     return parseWebArgs(args.slice(1), "web");
   }
@@ -308,6 +324,47 @@ function parseStopArgs(args: string[]): StopCliOptions {
     throw new Error(`Unknown stop option: ${arg}`);
   }
   return options;
+}
+
+function parseProfilesArgs(args: string[]): ProfilesCliOptions {
+  const options: ProfilesCliOptions = {
+    command: "profiles",
+    help: false
+  };
+  for (const arg of args) {
+    if (arg === "--help" || arg === "-h") {
+      options.help = true;
+      continue;
+    }
+    if (arg === "list") {
+      continue;
+    }
+    throw new Error(`Unknown profiles option: ${arg}`);
+  }
+  return options;
+}
+
+async function listProfiles(): Promise<void> {
+  const config = await loadAppConfig();
+  const profiles = config.profile.profiles;
+  if (profiles.length === 0) {
+    process.stdout.write("No profiles configured. Open the CCR management UI to create one.\n");
+    return;
+  }
+
+  const headers = ["NAME", "ID", "AGENT", "SURFACE", "MODEL"];
+  const rows = profiles.map((profile) => [
+    `${profile.name || profile.id}${profile.enabled ? "" : " (disabled)"}`,
+    profile.id,
+    profile.agent,
+    defaultProfileOpenSurface(profile),
+    profile.model
+  ]);
+  const widths = headers.map((header, index) =>
+    Math.max(header.length, ...rows.map((row) => row[index].length))
+  );
+  const formatRow = (row: string[]) => row.map((cell, index) => cell.padEnd(widths[index])).join("  ");
+  process.stdout.write(`${[formatRow(headers), ...rows.map(formatRow)].join("\n")}\n`);
 }
 
 function parseWebArgs(args: string[], command: WebCliOptions["command"], defaultOpen = false): WebCliOptions {
@@ -573,6 +630,7 @@ function printHelp(exitCode: number): void {
     `  ${command} ui [--host <host>] [--port <port>] [--open|--no-open] [--gateway|--no-gateway]`,
     `  ${command} serve [--host <host>] [--port <port>] [--open|--no-open] [--gateway|--no-gateway]`,
     `  ${command} stop`,
+    `  ${command} profiles [list]`,
     `  ${command} <profile-name-or-id> [cli|app] [-- <agent args>]`,
     "",
     "Notes:",
@@ -585,6 +643,7 @@ function printHelp(exitCode: number): void {
     `  ${command} ui`,
     `  ${command} serve --no-open`,
     `  ${command} stop`,
+    `  ${command} profiles`,
     `  ${command} Codex`,
     `  ${command} default-codex -- --model gpt-5-codex`,
     `  ${command} default-codex app`
@@ -651,6 +710,26 @@ function printStopHelp(exitCode: number): void {
     `  ${command} stop`,
     "",
     `Stops the background CCR service started by \`${command} start\`.`
+  ].join("\n");
+  const stream = exitCode === 0 ? process.stdout : process.stderr;
+  stream.write(`${output}\n`);
+  process.exitCode = exitCode;
+}
+
+function printProfilesHelp(exitCode: number): void {
+  const command = cliCommandName();
+  const output = [
+    "Usage:",
+    `  ${command} profiles [list]`,
+    "",
+    "Lists the configured profiles (name, id, agent, default surface, and model).",
+    "",
+    "Options:",
+    "  --help, -h  Show this help.",
+    "",
+    "Examples:",
+    `  ${command} profiles`,
+    `  ${command} profiles list`
   ].join("\n");
   const stream = exitCode === 0 ? process.stdout : process.stderr;
   stream.write(`${output}\n`);
